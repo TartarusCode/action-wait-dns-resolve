@@ -1,19 +1,24 @@
 # action.yml
-name: 'Resolve Hostname'
-description: 'Test DNS Resolution'
+name: 'Wait for DNS Resolution'
+description: 'Wait for DNS records to resolve with retry logic and comprehensive error handling'
 inputs:
   remotehost:  # id of input
-    description: 'Hostname to Resolve'
+    description: 'Hostname to resolve (e.g., example.com)'
     required: true
     default: 'google.com'
   recordtype:
-    description: 'Record to Resolve'
+    description: 'DNS record type to resolve (A, AAAA, CNAME, MX, NS, PTR, SOA, SRV, TXT, SPF)'
     required: false
     default: 'A'
   maxtime:
-    description: "Maximum Seconds to Wait"
+    description: "Maximum time in seconds to wait for resolution (1-3600)"
     required: false
-    default: 60
+    default: '60'
+outputs:
+  myOutput:
+    description: 'Success message when DNS resolution succeeds'
+  error:
+    description: 'Error message if DNS resolution fails'
 runs:
   using: 'docker'
   image: 'Dockerfile'
