@@ -8,6 +8,9 @@ GitHub Action to wait for DNS records to resolve with retry logic and comprehens
 
 - **DNS Resolution**: Wait for DNS records to resolve with automatic retry logic
 - **Multiple Record Types**: Support for A, AAAA, CNAME, MX, NS, PTR, SOA, SRV, TXT, SPF records
+- **Custom DNS Servers**: Query specific resolver IPs when you need to verify propagation against a chosen nameserver
+- **Expected Value Assertions**: Retry until a specific DNS answer appears instead of stopping at the first successful response
+- **Structured Outputs**: Export resolved values and a machine-readable JSON result for downstream workflow logic
 - **Current Runtime**: Runs on a pinned `python:3.14-alpine` container base
 - **Comprehensive Validation**: Input validation for hostnames, record types, and timeouts
 - **Detailed Error Handling**: Specific error messages for different failure scenarios
@@ -29,6 +32,20 @@ Pin this action to a full commit SHA in production workflows for supply-chain sa
     maxtime: '60'
 ```
 
+### Custom DNS Server and Expected Value
+
+```yaml
+- name: Wait for DNS Cutover
+  id: dns_check
+  uses: BGarber42/action-wait-dns-resolve@<full-commit-sha>
+  with:
+    remotehost: 'api.example.com'
+    recordtype: 'CNAME'
+    nameserver: '1.1.1.1,8.8.8.8'
+    expectedvalue: 'new-target.example.net'
+    maxtime: '180'
+```
+
 ### Advanced Usage
 
 ```yaml
@@ -46,8 +63,17 @@ steps:
 
   - name: Check DNS Result
     env:
-      DNS_STATUS: ${{ steps.dns_check.outputs.myOutput }}
+      DNS_STATUS: ${{ steps.dns_check.outputs.message }}
+      DNS_VALUES: ${{ steps.dns_check.outputs.resolved_values }}
+      DNS_RESULT: ${{ steps.dns_check.outputs.resolution_result }}
     run: printf 'DNS Status: %s\n' "$DNS_STATUS"
+  - name: Show Structured DNS Result
+    env:
+      DNS_VALUES: ${{ steps.dns_check.outputs.resolved_values }}
+      DNS_RESULT: ${{ steps.dns_check.outputs.resolution_result }}
+    run: |
+      printf 'Resolved Values: %s\n' "$DNS_VALUES"
+      printf 'Structured Result: %s\n' "$DNS_RESULT"
 ```
 
 ### Wait for New Domain
@@ -67,14 +93,19 @@ steps:
 |-----------|-------------|----------|---------|
 | `remotehost` | Hostname to resolve (e.g., example.com) | Yes | None |
 | `recordtype` | DNS record type to resolve | No | `A` |
+| `nameserver` | Optional resolver IP, or comma-separated resolver IPs, to query instead of the system resolver | No | Empty |
+| `expectedvalue` | Optional expected DNS answer value. The action retries until one resolved answer matches it. | No | Empty |
 | `maxtime` | Maximum time in seconds to wait (1-3600) | No | `60` |
 
 ## Outputs
 
 | Parameter | Description |
 |-----------|-------------|
-| `myOutput` | Success message when DNS resolution succeeds |
-| `error` | Error message written before the step fails |
+| `message` | Success message when DNS resolution succeeds |
+| `error_message` | Error message written before the step fails |
+| `resolved_values` | JSON array of resolved answer strings |
+| `matched_expected` | `true` when `expectedvalue` was provided and matched before timeout, otherwise `false` |
+| `resolution_result` | JSON object containing the hostname, record type, nameservers, resolved values, expected value, and match result |
 
 ## Supported Record Types
 
@@ -99,7 +130,7 @@ The action handles various DNS resolution scenarios:
 - **Invalid Inputs**: Invalid hostname, record type, or timeout values
 - **Network Issues**: Connection problems
 
-The action writes outputs through `$GITHUB_OUTPUT`, so `steps.<id>.outputs.myOutput` and `steps.<id>.outputs.error` are available to later steps.
+The action writes outputs through `$GITHUB_OUTPUT`, so `steps.<id>.outputs.message`, `steps.<id>.outputs.error_message`, `steps.<id>.outputs.resolved_values`, `steps.<id>.outputs.matched_expected`, and `steps.<id>.outputs.resolution_result` are available to later steps.
 
 ## Runtime
 
@@ -110,9 +141,11 @@ This action runs as a Docker-based action on a pinned `python:3.14-alpine` image
 1. **Use Appropriate Timeouts**: Set reasonable timeouts based on your DNS propagation expectations
 2. **Handle Errors**: Check the error output in your workflows
 3. **Use Environment Variables for Outputs**: Pass action outputs through `env:` before referencing them in shell commands
-4. **Validate Hostnames**: Ensure hostnames are properly formatted
-5. **Monitor Logs**: Use structured logging for debugging
-6. **Test Different Record Types**: Verify the specific record type you need
+4. **Prefer Explicit Nameservers for Cutovers**: Set `nameserver` when you need to verify propagation against a specific resolver
+5. **Use `expectedvalue` for Deterministic Checks**: Assert the exact DNS answer you expect instead of only checking for any response
+6. **Validate Hostnames**: Ensure hostnames are properly formatted
+7. **Monitor Logs**: Use structured logging for debugging
+8. **Test Different Record Types**: Verify the specific record type you need
 
 ## Development
 
@@ -144,6 +177,19 @@ python -m unittest discover -s tests -v
     remotehost: 'lb.example.com'
     recordtype: 'CNAME'
     maxtime: '120'
+```
+
+### Wait for a Specific DNS Target
+
+```yaml
+- name: Wait for DNS Target to Match
+  uses: BGarber42/action-wait-dns-resolve@<full-commit-sha>
+  with:
+    remotehost: 'api.example.com'
+    recordtype: 'CNAME'
+    nameserver: '1.1.1.1'
+    expectedvalue: 'new-target.example.net'
+    maxtime: '300'
 ```
 
 ### Check Mail Server Records

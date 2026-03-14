@@ -9,15 +9,29 @@ inputs:
     description: 'DNS record type to resolve (A, AAAA, CNAME, MX, NS, PTR, SOA, SRV, TXT, SPF)'
     required: false
     default: 'A'
+  nameserver:
+    description: 'Optional DNS server IP address, or comma-separated list of IP addresses, to query instead of the system resolver'
+    required: false
+    default: ''
+  expectedvalue:
+    description: 'Optional expected DNS answer value. The action retries until one resolved value matches or the timeout is reached.'
+    required: false
+    default: ''
   maxtime:
     description: "Maximum time in seconds to wait for resolution (1-3600)"
     required: false
     default: '60'
 outputs:
-  myOutput:
+  message:
     description: 'Success message when DNS resolution succeeds'
-  error:
+  error_message:
     description: 'Error message if DNS resolution fails'
+  resolved_values:
+    description: 'JSON array of resolved values returned by DNS'
+  matched_expected:
+    description: 'Whether the resolved values matched expectedvalue'
+  resolution_result:
+    description: 'JSON object containing the hostname, record type, nameserver(s), resolved values, and expected-value match result'
 runs:
   using: 'docker'
   image: 'Dockerfile'
