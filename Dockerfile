@@ -1,6 +1,7 @@
-FROM python:alpine
+FROM python:3.14-alpine@sha256:faee120f7885a06fcc9677922331391fa690d911c020abb9e8025ff3d908e510
 
-COPY . /
-RUN pip install -r requirements.txt
+COPY requirements.txt /requirements.txt
+RUN pip install --no-cache-dir --require-hashes -r /requirements.txt
 
-CMD [ "python", "/entrypoint.py" ]
+COPY entrypoint.py /entrypoint.py
+CMD ["python", "/entrypoint.py"]
