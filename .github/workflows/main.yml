@@ -1,17 +1,38 @@
 name: Github Action - DNS Resolve
-on: [push]
+
+on:
+  push:
+
+permissions:
+  contents: read
 
 jobs:
-  dns_resolve_test:
+  unit_tests:
     runs-on: ubuntu-latest
-    name: A job to test resolution
+    name: Run unit tests
+    timeout-minutes: 10
     steps:
       - name: Checkout
-        uses: actions/checkout@v2
+        uses: actions/checkout@692973e3d937129bcbf40652eb9f2f61becf3332
+      - name: Install test dependencies
+        run: python3 -m pip install --require-hashes -r requirements.txt
+      - name: Run unit tests
+        run: python3 -m unittest discover -s tests -v
+
+  dns_resolve_test:
+    needs: unit_tests
+    runs-on: ubuntu-latest
+    name: A job to test resolution
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@692973e3d937129bcbf40652eb9f2f61becf3332
       - name: Test Working DNS Resolution
         uses: ./ # Uses an action in the root directory
-        id: conn
+        id: dns_check
         with:
           remotehost: 'google.com'
           recordtype: 'A'
-          maxtime: 300
+          maxtime: '300'
+      - name: Verify action output
+        run: test -n "${{ steps.dns_check.outputs.myOutput }}"
