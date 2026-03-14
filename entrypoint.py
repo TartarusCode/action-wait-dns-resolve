@@ -1,4 +1,7 @@
+import ipaddress
+import json
 import logging
+import math
 import os
 import time
 import uuid
@@ -28,6 +31,11 @@ RETRYABLE_DNS_EXCEPTIONS = (
     dns.resolver.NoNameservers,
     dns.exception.Timeout,
 )
+
+
+def normalize_comparable_value(value: str) -> str:
+    """Normalize DNS values for stable comparisons and JSON output."""
+    return value.strip().rstrip(".").lower()
 
 
 def validate_hostname(hostname: str) -> str:
@@ -108,6 +116,8 @@ def validate_max_time(max_time_str: str) -> float:
     """
     try:
         max_time = float(max_time_str) if max_time_str else float(DEFAULT_MAX_TIME)
+        if not math.isfinite(max_time):
+            raise ValueError("Max time must be a finite number")
         if max_time < 1:
             raise ValueError("Max time must be at least 1 second")
         if max_time > 3600:
@@ -117,6 +127,41 @@ def validate_max_time(max_time_str: str) -> float:
         error_msg = f"Invalid max time value '{max_time_str}': {str(e)}"
         logger.error(error_msg)
         raise ValueError(error_msg)
+
+
+def validate_nameservers(nameserver_str: str) -> list[str]:
+    """Validate an optional comma-separated nameserver list."""
+    if not nameserver_str or not nameserver_str.strip():
+        return []
+
+    validated_nameservers = []
+    for raw_nameserver in nameserver_str.split(","):
+        nameserver = raw_nameserver.strip()
+        if not nameserver:
+            continue
+        try:
+            validated_nameservers.append(str(ipaddress.ip_address(nameserver)))
+        except ValueError as exc:
+            raise ValueError(
+                f"Invalid nameserver '{nameserver}'. Use IP addresses only."
+            ) from exc
+
+    if not validated_nameservers:
+        raise ValueError("Nameserver input did not contain any valid IP addresses")
+
+    return validated_nameservers
+
+
+def validate_expected_value(expected_value: str) -> str | None:
+    """Validate an optional expected DNS answer value."""
+    if not expected_value or not expected_value.strip():
+        return None
+
+    validated_expected_value = expected_value.strip()
+    if any(char in validated_expected_value for char in "\r\n\0"):
+        raise ValueError("Expected value cannot contain control characters")
+
+    return validated_expected_value
 
 
 def set_output(name: str, value: str) -> None:
@@ -131,19 +176,54 @@ def set_output(name: str, value: str) -> None:
         github_output.write(f"{name}<<{delimiter}\n{value}\n{delimiter}\n")
 
 
-def build_resolver(max_time: float) -> dns.resolver.Resolver:
+def build_resolver(max_time: float, nameservers: list[str] | None = None) -> dns.resolver.Resolver:
     """Create a resolver whose per-attempt timeout fits within the overall max time."""
     resolver = dns.resolver.Resolver()
     per_attempt_timeout = min(MAX_DNS_QUERY_TIME, max_time)
     resolver.timeout = per_attempt_timeout
     resolver.lifetime = per_attempt_timeout
+    if nameservers:
+        resolver.nameservers = nameservers
     return resolver
+
+
+def assert_expected_value(resolved_answers: list[str], expected_value: str) -> bool:
+    """Check whether any resolved value matches the expected value."""
+    normalized_expected = normalize_comparable_value(expected_value)
+    return any(
+        normalize_comparable_value(answer) == normalized_expected
+        for answer in resolved_answers
+    )
+
+
+def build_resolution_result(
+    hostname: str,
+    record_type: str,
+    nameservers: list[str],
+    resolved_values: list[str],
+    expected_value: str | None,
+    matched_expected: bool,
+) -> str:
+    """Create a structured JSON summary for downstream workflow consumers."""
+    return json.dumps(
+        {
+            "hostname": hostname,
+            "record_type": record_type,
+            "nameservers": nameservers,
+            "resolved_values": resolved_values,
+            "expected_value": expected_value,
+            "matched_expected": matched_expected,
+        },
+        separators=(",", ":"),
+    )
 
 
 def resolve_dns(
     hostname: str,
     record_type: str = DEFAULT_RECORD_TYPE,
     max_time: float = float(DEFAULT_MAX_TIME),
+    nameservers: list[str] | None = None,
+    expected_value: str | None = None,
 ) -> list[str]:
     """
     Resolve a DNS record with retry logic.
@@ -158,7 +238,10 @@ def resolve_dns(
         dns.resolver.Timeout: If resolution times out
         DNSException: For non-retryable DNS errors
     """
-    resolver = build_resolver(max_time)
+    if not math.isfinite(max_time):
+        raise ValueError("Max time must be a finite number")
+
+    resolver = build_resolver(max_time, nameservers)
     deadline = time.monotonic() + max_time
     attempt = 1
     retry_delay = 1.0
@@ -168,6 +251,10 @@ def resolve_dns(
             logger.info(f"Resolving {record_type} record for {hostname} (attempt {attempt})")
             answers = resolver.resolve(hostname, record_type)
             resolved_answers = [str(answer) for answer in answers]
+            if expected_value and not assert_expected_value(resolved_answers, expected_value):
+                raise dns.resolver.NoAnswer(
+                    f"Resolved values {resolved_answers} did not match expected value '{expected_value}'"
+                )
             logger.info(
                 f"Successfully resolved {record_type} record for {hostname}: {resolved_answers}"
             )
@@ -201,42 +288,80 @@ def main() -> None:
         # Get and validate inputs
         hostname = os.environ["INPUT_REMOTEHOST"]
         record_type = os.environ.get("INPUT_RECORDTYPE", DEFAULT_RECORD_TYPE)
+        nameserver_str = os.environ.get("INPUT_NAMESERVER", "")
+        expected_value_str = os.environ.get("INPUT_EXPECTEDVALUE", "")
         max_time_str = os.environ.get("INPUT_MAXTIME", str(DEFAULT_MAX_TIME))
 
         # Validate inputs
         validated_hostname = validate_hostname(hostname)
         validated_record_type = validate_record_type(record_type)
+        validated_nameservers = validate_nameservers(nameserver_str)
+        validated_expected_value = validate_expected_value(expected_value_str)
         validated_max_time = validate_max_time(max_time_str)
 
-        logger.info(f"Starting DNS resolution: {validated_hostname} ({validated_record_type})")
+        logger.info(
+            f"Starting DNS resolution: {validated_hostname} ({validated_record_type})"
+        )
 
         # Attempt resolution
-        resolve_dns(validated_hostname, validated_record_type, validated_max_time)
+        resolved_values = resolve_dns(
+            validated_hostname,
+            validated_record_type,
+            validated_max_time,
+            validated_nameservers,
+            validated_expected_value,
+        )
 
         output_message = f"Successfully resolved {validated_record_type} record for {validated_hostname}"
-        set_output("myOutput", output_message)
-        set_output("error", "")
+        matched_expected = validated_expected_value is not None
+        set_output("message", output_message)
+        set_output("error_message", "")
+        set_output("resolved_values", json.dumps(resolved_values))
+        set_output("matched_expected", str(matched_expected).lower())
+        set_output(
+            "resolution_result",
+            build_resolution_result(
+                validated_hostname,
+                validated_record_type,
+                validated_nameservers,
+                resolved_values,
+                validated_expected_value,
+                matched_expected,
+            ),
+        )
         logger.info("DNS resolution completed successfully")
 
     except TimeoutError as exc:
         error_msg = str(exc)
         logger.error(error_msg)
-        set_output("error", error_msg)
+        set_output("error_message", error_msg)
+        set_output("resolved_values", "[]")
+        set_output("matched_expected", "false")
+        set_output("resolution_result", "{}")
         raise RuntimeError(error_msg) from exc
     except ValueError as exc:
         error_msg = f"Invalid input: {str(exc)}"
         logger.error(error_msg)
-        set_output("error", error_msg)
+        set_output("error_message", error_msg)
+        set_output("resolved_values", "[]")
+        set_output("matched_expected", "false")
+        set_output("resolution_result", "{}")
         raise RuntimeError(error_msg) from exc
     except DNSException as exc:
         error_msg = f"DNS resolution failed: {str(exc)}"
         logger.error(error_msg)
-        set_output("error", error_msg)
+        set_output("error_message", error_msg)
+        set_output("resolved_values", "[]")
+        set_output("matched_expected", "false")
+        set_output("resolution_result", "{}")
         raise RuntimeError(error_msg) from exc
     except Exception as exc:
         error_msg = f"Unexpected error: {str(exc)}"
         logger.error(error_msg)
-        set_output("error", error_msg)
+        set_output("error_message", error_msg)
+        set_output("resolved_values", "[]")
+        set_output("matched_expected", "false")
+        set_output("resolution_result", "{}")
         raise
 
 

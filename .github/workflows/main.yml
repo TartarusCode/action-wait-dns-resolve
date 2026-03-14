@@ -35,4 +35,11 @@ jobs:
           recordtype: 'A'
           maxtime: '300'
       - name: Verify action output
-        run: test -n "${{ steps.dns_check.outputs.myOutput }}"
+        env:
+          DNS_MESSAGE: ${{ steps.dns_check.outputs.message }}
+          DNS_VALUES: ${{ steps.dns_check.outputs.resolved_values }}
+          DNS_RESULT: ${{ steps.dns_check.outputs.resolution_result }}
+        run: |
+          test -n "$DNS_MESSAGE"
+          test "$DNS_VALUES" != "[]"
+          test "$DNS_RESULT" != "{}"
