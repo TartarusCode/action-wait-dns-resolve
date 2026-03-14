@@ -5,7 +5,6 @@ inputs:
   remotehost:  # id of input
     description: 'Hostname to resolve (e.g., example.com)'
     required: true
-    default: 'google.com'
   recordtype:
     description: 'DNS record type to resolve (A, AAAA, CNAME, MX, NS, PTR, SOA, SRV, TXT, SPF)'
     required: false
